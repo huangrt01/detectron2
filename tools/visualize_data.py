@@ -90,7 +90,7 @@ if __name__ == "__main__":
         dicts = list(chain.from_iterable([DatasetCatalog.get(k) for k in cfg.DATASETS.TRAIN]))
         if cfg.MODEL.KEYPOINT_ON:
             dicts = filter_images_with_few_keypoints(dicts, 1)
-        for dic in tqdm.tqdm(dicts):
+        for dic in dicts:
             img = utils.read_image(dic["file_name"], "RGB")
             visualizer = Visualizer(img, metadata=metadata, scale=scale)
             vis = visualizer.draw_dataset_dict(dic)

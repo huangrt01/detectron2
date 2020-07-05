@@ -1,5 +1,6 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import logging
+import math
 import numpy as np
 import torch
 from fvcore.nn import smooth_l1_loss
@@ -124,7 +125,7 @@ class FastRCNNOutputs(object):
     """
 
     def __init__(
-        self, box2box_transform, pred_class_logits, pred_proposal_deltas, proposals, smooth_l1_beta
+        self, box2box_transform, pred_class_logits, pred_proposal_deltas, proposals, smooth_l1_beta, samples_per_class,
     ):
         """
         Args:
@@ -150,8 +151,10 @@ class FastRCNNOutputs(object):
         self.box2box_transform = box2box_transform
         self.num_preds_per_image = [len(p) for p in proposals]
         self.pred_class_logits = pred_class_logits
+        
         self.pred_proposal_deltas = pred_proposal_deltas
         self.smooth_l1_beta = smooth_l1_beta
+        self.samples_per_class=samples_per_class
 
         box_type = type(proposals[0].proposal_boxes)
         # cat(..., dim=0) concatenates over all images in the batch
@@ -197,6 +200,109 @@ class FastRCNNOutputs(object):
         """
         self._log_accuracy()
         return F.cross_entropy(self.pred_class_logits, self.gt_classes, reduction="mean")
+
+    def sigmoid_cross_entropy_loss(self):
+        self._log_accuracy()
+        loss = nn.BCEWithLogitsLoss()
+        one_hot = torch.zeros(self.gt_classes.shape[0], self.pred_class_logits.shape[1]).to(self.gt_classes.device).scatter_(1, self.gt_classes.unsqueeze(1), 1)
+        temploss = 1024*loss(self.pred_class_logits, one_hot)
+        if(temploss>1):
+            temploss = 100 * loss(self.pred_class_logits, one_hot)
+        return temploss
+    
+    def focal_loss(self,labels, logits, alpha, gamma):
+        """Compute the focal loss between `logits` and the ground truth `labels`.
+        Focal loss = -alpha_t * (1-pt)^gamma * log(pt)
+        where pt is the probability of being classified to the true class.
+        pt = p (if true class), otherwise pt = 1 - p. p = sigmoid(logit).
+        Args:
+        labels: A float tensor of size [batch, num_classes].
+        logits: A float tensor of size [batch, num_classes].
+        alpha: A float tensor of size [batch_size]
+            specifying per-example weight for balanced cross entropy.
+        gamma: A float scalar modulating loss from hard and easy examples.
+        Returns:
+        focal_loss: A float32 scalar representing normalized total loss.
+        """
+        BCLoss = F.binary_cross_entropy_with_logits(input=logits, target=labels, reduction="none")
+
+        if gamma == 0.0:
+            modulator = 1.0
+        else:
+            modulator = torch.exp(-gamma * labels * logits - gamma * torch.log(1 + torch.exp(-1.0 * logits)))
+        loss = modulator * BCLoss   #1024*1231
+        weighted_loss = alpha * loss
+        focal_loss = torch.sum(weighted_loss)
+        focal_loss /= torch.sum(labels)
+        focal_loss*=25
+
+        #if focal_loss>5: 
+         #   focal_loss/=3   
+        return focal_loss
+
+    def equalization_loss(self,):
+        self._log_accuracy()
+        device = self.gt_classes.device
+        logits = self.pred_class_logits
+        one_hot = torch.zeros(self.gt_classes.shape[0], self.pred_class_logits.shape[1]).to(
+            self.gt_classes.device).scatter_(1, self.gt_classes.unsqueeze(1), 1)
+        samples_per_cls = self.samples_per_class
+        no_of_classes = len(self.samples_per_class) + 1
+        weights = 1-one_hot[:,0]
+        weights = torch.tensor(weights, device=device).float()  # [1231]
+        loss = nn.BCEWithLogitsLoss(weight=weights)
+        temp = loss(logits, one_hot)
+        eq_loss = 2000 * temp
+        return eq_loss
+
+    def CB_loss(self, loss_type, beta, gamma):
+        """Compute the Class Balanced Loss between `logits` and the ground truth `labels`.
+        Class Balanced Loss: ((1-beta)/(1-beta^n))*Loss(labels, logits)
+        where Loss is one of the standard losses used for Neural Networks.
+        Args:
+        labels: A int tensor of size [batch].
+        logits: A float tensor of size [batch, no_of_classes].
+        samples_per_cls: A python list of size [no_of_classes].
+        no_of_classes: total number of classes. int
+        loss_type: string. One of "sigmoid", "focal", "softmax".
+        beta: float. Hyperparameter for Class balanced loss.
+        gamma: float. Hyperparameter for Focal loss.
+        Returns:
+        cb_loss: A float tensor representing class balanced loss
+        """
+        self._log_accuracy()
+        device = self.gt_classes.device
+        logits = self.pred_class_logits
+        samples_per_cls = self.samples_per_class
+        no_of_classes = len(self.samples_per_class) + 1
+        effective_num = 1.0 - np.power(beta, samples_per_cls)
+        weights = (1.0 - beta) / np.array(effective_num)
+        weights = weights / np.sum(weights) * no_of_classes
+        weights = np.concatenate((weights,[np.mean(weights)]))
+        one_hot = torch.zeros(self.gt_classes.shape[0], self.pred_class_logits.shape[1]).to(
+            self.gt_classes.device).scatter_(1, self.gt_classes.unsqueeze(1), 1)
+        weights = torch.tensor(weights, device=device).float()  # [1231]
+        weights = weights.unsqueeze(0)  #[1,1231]
+        weights = weights.repeat(one_hot.shape[0],1) * one_hot #[1024,1231]
+        weights = weights.sum(1)
+        weights = weights.unsqueeze(1)
+        weights = weights.repeat(1, no_of_classes)
+        if loss_type == "focal":
+            cb_loss = self.focal_loss(one_hot, logits, weights, gamma)
+            print(cb_loss)
+        elif loss_type == "sigmoid":
+            loss = nn.BCEWithLogitsLoss(weight=weights)
+            temp = loss(logits, one_hot)
+            cb_loss = 3000 * temp
+            print(cb_loss)
+            if(cb_loss > 1):
+                 cb_loss = 1000 * temp
+
+            
+        elif loss_type == "softmax":
+            pred = logits.softmax(dim = 1)
+            cb_loss = F.binary_cross_entropy(input = pred, target = one_hot, weight = weights)
+        return cb_loss
 
     def smooth_l1_loss(self):
         """
@@ -262,9 +368,16 @@ class FastRCNNOutputs(object):
         Returns:
             A dict of losses (scalar tensors) containing keys "loss_cls" and "loss_box_reg".
         """
+        # loss_type = "sigmoid"
+        # beta = 0.99
+        # gamma = 2.0
+        loss_cls=self.sigmoid_cross_entropy_loss()
+        loss_box_reg = self.smooth_l1_loss()        
+        print(loss_cls)
+        print(loss_box_reg)
         return {
-            "loss_cls": self.softmax_cross_entropy_loss(),
-            "loss_box_reg": self.smooth_l1_loss(),
+            "loss_cls": self.sigmoid_cross_entropy_loss(),#self.CB_loss(loss_type,beta,gamma),
+            "loss_box_reg": self.smooth_l1_loss()  ,
         }
 
     def predict_boxes(self):
@@ -341,12 +454,37 @@ class FastRCNNOutputLayers(nn.Module):
 
         nn.init.normal_(self.cls_score.weight, std=0.01)
         nn.init.normal_(self.bbox_pred.weight, std=0.001)
-        for l in [self.cls_score, self.bbox_pred]:
-            nn.init.constant_(l.bias, 0)
 
-    def forward(self, x):
+        # Use prior in model initialization to improve stability
+        prior_prob = 0.00001 
+        bias_value = -math.log((1 - prior_prob) / prior_prob)
+        nn.init.constant_(self.cls_score.bias, bias_value)
+        nn.init.constant_(self.bbox_pred.bias, 0)
+        # for l in [self.cls_score, self.bbox_pred]:
+        #     nn.init.constant_(l.bias, 0)
+
+    def forward(self, x, Iter):
         if x.dim() > 2:
             x = torch.flatten(x, start_dim=1)
-        scores = self.cls_score(x)
-        proposal_deltas = self.bbox_pred(x)
+        # scores=self.cls_score(x.detach())
+        # proposal_deltas = self.bbox_pred(x.detach())
+        # return scores, proposal_deltas
+        # scores=self.cls_score(x)
+        # proposal_deltas = self.bbox_pred(x)
+
+        print(Iter)
+        cRT_iter=89999
+        if(Iter == cRT_iter):
+            print("fresh the classifier!!!")
+            nn.init.normal_(self.cls_score.weight, std=0.01)
+            prior_prob = 0.001
+            bias_value = -math.log((1 - prior_prob) / prior_prob)
+            nn.init.constant_(self.cls_score.bias, bias_value)
+
+        if(Iter >= cRT_iter):
+            scores = self.cls_score(x.detach())
+            proposal_deltas = self.bbox_pred(x.detach())
+        else:
+            scores=self.cls_score(x)
+            proposal_deltas = self.bbox_pred(x) 
         return scores, proposal_deltas

@@ -77,9 +77,9 @@ class Trainer(DefaultTrainer):
                 torch.cuda.device_count() >= comm.get_rank()
             ), "CityscapesEvaluator currently do not work with multiple machines."
             return CityscapesEvaluator(dataset_name)
-        elif evaluator_type == "pascal_voc":
+        if evaluator_type == "pascal_voc":
             return PascalVOCDetectionEvaluator(dataset_name)
-        elif evaluator_type == "lvis":
+        if evaluator_type == "lvis":
             return LVISEvaluator(dataset_name, cfg, True, output_folder)
         if len(evaluator_list) == 0:
             raise NotImplementedError(
@@ -87,7 +87,7 @@ class Trainer(DefaultTrainer):
                     dataset_name, evaluator_type
                 )
             )
-        elif len(evaluator_list) == 1:
+        if len(evaluator_list) == 1:
             return evaluator_list[0]
         return DatasetEvaluators(evaluator_list)
 

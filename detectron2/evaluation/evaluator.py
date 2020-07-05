@@ -118,7 +118,7 @@ def inference_on_dataset(model, data_loader, evaluator):
                 total_compute_time = 0
 
             start_compute_time = time.time()
-            outputs = model(inputs)
+            outputs = model(inputs,90000) #作为iter的参数
             torch.cuda.synchronize()
             total_compute_time += time.time() - start_compute_time
             evaluator.process(inputs, outputs)

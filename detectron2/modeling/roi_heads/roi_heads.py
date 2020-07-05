@@ -378,7 +378,7 @@ class Res5ROIHeads(ROIHeads):
         x = self.pooler(features, boxes)
         return self.res5(x)
 
-    def forward(self, images, features, proposals, targets=None):
+    def forward(self, images, features, proposals, targets=None): #call函数自动调用forward
         """
         See :class:`ROIHeads.forward`.
         """
@@ -550,7 +550,7 @@ class StandardROIHeads(ROIHeads):
             cfg, ShapeSpec(channels=in_channels, width=pooler_resolution, height=pooler_resolution)
         )
 
-    def forward(self, images, features, proposals, targets=None):
+    def forward(self, images, features, proposals,samples_per_class,Iter, targets=None,):
         """
         See :class:`ROIHeads.forward`.
         """
@@ -558,18 +558,16 @@ class StandardROIHeads(ROIHeads):
         if self.training:
             proposals = self.label_and_sample_proposals(proposals, targets)
         del targets
-
-        features_list = [features[f] for f in self.in_features]
-
+        features_list = [features[f] for f in self.in_features]     # 2*256*a*b
         if self.training:
-            losses = self._forward_box(features_list, proposals)
+            losses = self._forward_box(features_list, proposals,samples_per_class,Iter)
             # During training the proposals used by the box head are
             # used by the mask, keypoint (and densepose) heads.
             losses.update(self._forward_mask(features_list, proposals))
             losses.update(self._forward_keypoint(features_list, proposals))
             return proposals, losses
         else:
-            pred_instances = self._forward_box(features_list, proposals)
+            pred_instances = self._forward_box(features_list, proposals,samples_per_class,Iter)
             # During inference cascaded prediction is used: the mask and keypoints heads are only
             # applied to the top scoring box detections.
             pred_instances = self.forward_with_given_boxes(features, pred_instances)
@@ -601,7 +599,7 @@ class StandardROIHeads(ROIHeads):
         instances = self._forward_keypoint(features, instances)
         return instances
 
-    def _forward_box(self, features, proposals):
+    def _forward_box(self, features, proposals, samples_per_class, Iter):
         """
         Forward logic of the box prediction branch.
 
@@ -618,7 +616,7 @@ class StandardROIHeads(ROIHeads):
         """
         box_features = self.box_pooler(features, [x.proposal_boxes for x in proposals])
         box_features = self.box_head(box_features)
-        pred_class_logits, pred_proposal_deltas = self.box_predictor(box_features)
+        pred_class_logits, pred_proposal_deltas = self.box_predictor(box_features, Iter)
         del box_features
 
         outputs = FastRCNNOutputs(
@@ -626,7 +624,7 @@ class StandardROIHeads(ROIHeads):
             pred_class_logits,
             pred_proposal_deltas,
             proposals,
-            self.smooth_l1_beta,
+            self.smooth_l1_beta, samples_per_class
         )
         if self.training:
             return outputs.losses()

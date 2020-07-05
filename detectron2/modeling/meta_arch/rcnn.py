@@ -2,6 +2,7 @@
 import logging
 import torch
 from torch import nn
+import numpy as np
 
 from detectron2.structures import ImageList
 from detectron2.utils.logger import log_first_n
@@ -32,6 +33,7 @@ class GeneralizedRCNN(nn.Module):
         self.proposal_generator = build_proposal_generator(cfg, self.backbone.output_shape())
         self.roi_heads = build_roi_heads(cfg, self.backbone.output_shape())
 
+
         assert len(cfg.MODEL.PIXEL_MEAN) == len(cfg.MODEL.PIXEL_STD)
         num_channels = len(cfg.MODEL.PIXEL_MEAN)
         pixel_mean = torch.Tensor(cfg.MODEL.PIXEL_MEAN).to(self.device).view(num_channels, 1, 1)
@@ -39,7 +41,7 @@ class GeneralizedRCNN(nn.Module):
         self.normalizer = lambda x: (x - pixel_mean) / pixel_std
         self.to(self.device)
 
-    def forward(self, batched_inputs):
+    def forward(self, batched_inputs,Iter):
         """
         Args:
             batched_inputs: a list, batched outputs of :class:`DatasetMapper` .
@@ -64,8 +66,9 @@ class GeneralizedRCNN(nn.Module):
         """
         if not self.training:
             return self.inference(batched_inputs)
-
         images = self.preprocess_image(batched_inputs)
+        self.iter=Iter
+        samples_per_class=batched_inputs[0]["samples_per_class"]
         if "instances" in batched_inputs[0]:
             gt_instances = [x["instances"].to(self.device) for x in batched_inputs]
         elif "targets" in batched_inputs[0]:
@@ -85,7 +88,7 @@ class GeneralizedRCNN(nn.Module):
             proposals = [x["proposals"].to(self.device) for x in batched_inputs]
             proposal_losses = {}
 
-        _, detector_losses = self.roi_heads(images, features, proposals, gt_instances)
+        _, detector_losses = self.roi_heads(images, features, proposals,samples_per_class,self.iter, gt_instances)
 
         losses = {}
         losses.update(detector_losses)
@@ -113,6 +116,8 @@ class GeneralizedRCNN(nn.Module):
 
         images = self.preprocess_image(batched_inputs)
         features = self.backbone(images.tensor)
+        samples_per_class = np.zeros(1230)
+        Iter=90000; print("XXXXXX")
 
         if detected_instances is None:
             if self.proposal_generator:
@@ -121,7 +126,7 @@ class GeneralizedRCNN(nn.Module):
                 assert "proposals" in batched_inputs[0]
                 proposals = [x["proposals"].to(self.device) for x in batched_inputs]
 
-            results, _ = self.roi_heads(images, features, proposals, None)
+            results, _ = self.roi_heads(images, features, proposals,samples_per_class,Iter, None)
         else:
             detected_instances = [x.to(self.device) for x in detected_instances]
             results = self.roi_heads.forward_with_given_boxes(features, detected_instances)

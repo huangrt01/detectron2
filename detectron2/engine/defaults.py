@@ -185,7 +185,7 @@ class DefaultPredictor:
         image = torch.as_tensor(image.astype("float32").transpose(2, 0, 1))
 
         inputs = {"image": image, "height": height, "width": width}
-        predictions = self.model([inputs])[0]
+        predictions = self.model([inputs],90000)[0]
         return predictions
 
 
@@ -237,14 +237,15 @@ class DefaultTrainer(SimpleTrainer):
             cfg (CfgNode):
         """
         # Assume these objects must be constructed in this order.
+        data_loader = self.build_train_loader(cfg)
         model = self.build_model(cfg)
         optimizer = self.build_optimizer(cfg, model)
-        data_loader = self.build_train_loader(cfg)
+        
 
         # For training, wrap with DDP. But don't need this for inference.
         if comm.get_world_size() > 1:
             model = DistributedDataParallel(
-                model, device_ids=[comm.get_local_rank()], broadcast_buffers=False
+                model, device_ids=[comm.get_local_rank()], broadcast_buffers=False,find_unused_parameters=True
             )
         super().__init__(model, data_loader, optimizer)
 
@@ -275,12 +276,16 @@ class DefaultTrainer(SimpleTrainer):
         """
         # The checkpoint stores the training iteration that just finished, thus we start
         # at the next iteration (or iter zero if there's no checkpoint).
-        self.start_iter = (
-            self.checkpointer.resume_or_load(self.cfg.MODEL.WEIGHTS, resume=resume).get(
-                "iteration", -1
-            )
-            + 1
-        )
+
+        #为了cRT改的
+
+        self.start_iter = 0
+        # (
+        #     self.checkpointer.resume_or_load(self.cfg.MODEL.WEIGHTS, resume=resume).get(
+        #         "iteration", -1
+        #     )
+        #     + 1
+        # )
 
     def build_hooks(self):
         """

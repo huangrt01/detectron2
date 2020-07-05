@@ -8,6 +8,7 @@ from fvcore.common.file_io import PathManager
 from detectron2.data import DatasetCatalog, MetadataCatalog
 
 from .lvis_v0_5_categories import LVIS_CATEGORIES
+import numpy as np
 
 """
 This file contains functions to parse LVIS-format annotations into dicts in the
@@ -43,7 +44,7 @@ def load_lvis_json(json_file, image_root, dataset_name=None):
         json_file (str): full path to the LVIS json annotation file.
         image_root (str): the directory where the images in this json file exists.
         dataset_name (str): the name of the dataset (e.g., "lvis_v0.5_train").
-            If provided, this function will put "thing_classes" into the metadata
+            If provided, this function will put "thing_classes","samples_per_classes" into the metadata
             associated with this dataset.
 
     Returns:
@@ -63,9 +64,6 @@ def load_lvis_json(json_file, image_root, dataset_name=None):
     if timer.seconds() > 1:
         logger.info("Loading {} takes {:.2f} seconds.".format(json_file, timer.seconds()))
 
-    if dataset_name is not None:
-        meta = get_lvis_instances_meta(dataset_name)
-        MetadataCatalog.get(dataset_name).set(**meta)
 
     # sort indices for reproducible results
     img_ids = sorted(list(lvis_api.imgs.keys()))
@@ -105,6 +103,12 @@ def load_lvis_json(json_file, image_root, dataset_name=None):
     logger.info("Loaded {} images in the LVIS format from {}".format(len(imgs_anns), json_file))
 
     dataset_dicts = []
+    samples_per_class=np.zeros(len(LVIS_CATEGORIES))
+
+    if dataset_name is not None:
+        meta = get_lvis_instances_meta(dataset_name)
+        MetadataCatalog.get(dataset_name).set(**meta)
+
 
     for (img_dict, anno_dict_list) in imgs_anns:
         record = {}
@@ -120,8 +124,8 @@ def load_lvis_json(json_file, image_root, dataset_name=None):
         record["not_exhaustive_category_ids"] = img_dict.get("not_exhaustive_category_ids", [])
         record["neg_category_ids"] = img_dict.get("neg_category_ids", [])
         image_id = record["image_id"] = img_dict["id"]
-
         objs = []
+
         for anno in anno_dict_list:
             # Check that the image_id in this annotation is the same as
             # the image_id we're looking at.
@@ -129,6 +133,7 @@ def load_lvis_json(json_file, image_root, dataset_name=None):
             assert anno["image_id"] == image_id
             obj = {"bbox": anno["bbox"], "bbox_mode": BoxMode.XYWH_ABS}
             obj["category_id"] = anno["category_id"] - 1  # Convert 1-indexed to 0-indexed
+            samples_per_class[obj["category_id"]] += 1
             segm = anno["segmentation"]  # list[list[float]]
             # filter out invalid polygons (< 3 points)
             valid_segm = [poly for poly in segm if len(poly) % 2 == 0 and len(poly) >= 6]
@@ -140,6 +145,9 @@ def load_lvis_json(json_file, image_root, dataset_name=None):
             objs.append(obj)
         record["annotations"] = objs
         dataset_dicts.append(record)
+    for record in dataset_dicts:
+        record["samples_per_class"] = samples_per_class
+    
 
     return dataset_dicts
 

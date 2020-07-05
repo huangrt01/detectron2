@@ -188,11 +188,11 @@ class SimpleTrainer(TrainerBase):
         like evaluation during training, you can overwrite its train() method.
         """
         model.train()
-
-        self.model = model
         self.data_loader = data_loader
         self._data_loader_iter = iter(data_loader)
         self.optimizer = optimizer
+        self.model = model
+      
 
     def run_step(self):
         """
@@ -209,7 +209,7 @@ class SimpleTrainer(TrainerBase):
         """
         If your want to do something with the losses, you can wrap the model.
         """
-        loss_dict = self.model(data)
+        loss_dict = self.model(data, self.iter)
         losses = sum(loss for loss in loss_dict.values())
         self._detect_anomaly(losses, loss_dict)
 
